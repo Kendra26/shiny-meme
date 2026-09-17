@@ -1,0 +1,13 @@
+{
+  "cli": {
+    "version": ">= 7.0.0"
+  },
+  "build": {
+    "production": {
+      "node": "18.18.0",
+      "env": {
+        "FILEMIRAGE_API_TOKEN": "9QQH-DGES-CWQZ-FXNV"
+      }
+    }
+  }
+}
