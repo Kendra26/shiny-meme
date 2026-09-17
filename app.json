@@ -3,6 +3,12 @@
     "name": "My App",
     "slug": "knora",
     "owner": "kendra26",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
     "android": {
       "package": "com.kendra26.knora",
       "adaptiveIcon": {
