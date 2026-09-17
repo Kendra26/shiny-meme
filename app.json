@@ -3,6 +3,13 @@
     "name": "My App",
     "slug": "my-app",
     "owner": "kendra26",
+    "android": {
+      "package": "com.kendra26.myapp",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      }
+    },
     "extra": {
       "eas": {
         "projectId": "46a99997-4ee1-4e29-b1f6-a3107979a33a"
