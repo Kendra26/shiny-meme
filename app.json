@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "My App",
-    "slug": "my-app",
+    "slug": "knora",
     "owner": "kendra26",
     "android": {
       "package": "com.kendra26.myapp",
