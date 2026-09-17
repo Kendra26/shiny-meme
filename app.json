@@ -4,7 +4,7 @@
     "slug": "knora",
     "owner": "kendra26",
     "android": {
-      "package": "com.kendra26.myapp",
+      "package": "com.kendra26.knora",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
