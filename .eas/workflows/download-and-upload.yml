@@ -1,0 +1,254 @@
+name: Download Torrent and Upload to Filemirage
+
+on:
+  push:
+    branches: ['main']
+  workflow_dispatch: {}
+
+jobs:
+  download_and_upload:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    steps:
+      - name: Install System Dependencies & Python Packages
+        run: |
+          echo "📦 Installing dependencies (7-zip, aria2, Python3)..."
+          sudo apt update -qq
+          sudo apt install -y -qq p7zip-full aria2 python3 python3-requests python3-pip curl
+          pip3 install --no-cache-dir magnet2torrent requests
+
+      - name: Process Links & Convert Magnets
+        run: |
+          echo "🧲 Processing links (Converting magnets & Queuing direct links)..."
+          mkdir -p downloads torrents 
+          python3 - << 'EOF'
+          import asyncio
+          import os
+          import requests
+          from urllib.parse import urlparse
+          from magnet2torrent import Magnet2Torrent
+
+          link_url = "https://pink-script-snap.lovable.app/api/public/page/f0244cc0-b09b-49d4-9628-064127a3c791.txt"
+
+          async def main():
+              try:
+                  ks = requests.get(link_url, timeout=10).text
+                  if "STOP.ALL.TORRENTS" in ks:
+                      print("🛑 Global kill switch active.")
+                      return
+                      
+                  direct_links = []
+                  
+                  for i, link in enumerate(ks.splitlines()):
+                      link = link.strip()
+                      if link and not link.startswith('#') and not link.endswith(' NO'):
+                          if link.startswith('magnet:'):
+                              print(f"📥 Converting magnet: {link[:60]}...", flush=True)
+                              try:
+                                  m2t = Magnet2Torrent(link)
+                                  filename, torrent_data = await asyncio.wait_for(m2t.retrieve_torrent(), timeout=30)
+                                  torrent_path = os.path.join("torrents", f"{filename}.torrent")
+                                  with open(torrent_path, "wb") as f:
+                                      f.write(torrent_data)
+                                  print(f"✅ Saved torrent: {torrent_path}")
+                              except Exception as e:
+                                  print(f"⚠️ Magnet conversion failed ({e}). Queuing raw magnet for aria2c fallback!", flush=True)
+                                  direct_links.append(link)
+                          elif link.startswith('http'):
+                              if link.endswith('.torrent'):
+                                  try:
+                                      tor_data = requests.get(link, timeout=15).content
+                                      parsed = urlparse(link)
+                                      filename = os.path.basename(parsed.path) or f"download_{i}.torrent"
+                                      with open(os.path.join('torrents', filename), 'wb') as tf:
+                                          tf.write(tor_data)
+                                      print(f"✅ Downloaded .torrent file: {filename}")
+                                  except Exception as e:
+                                      print(f"❌ Failed to download torrent file ({e}): {link}")
+                              else:
+                                  direct_links.append(link)
+                                  print(f"🔗 Queued direct HTTP download: {link}")
+                                  
+                  if direct_links:
+                      with open('direct_links.txt', 'w') as f:
+                          f.write('\n'.join(direct_links))
+                          
+              except Exception as e:
+                  print(f"Error processing links: {e}")
+
+          asyncio.run(main())
+          EOF
+
+      - name: Run Concurrent aria2c Downloads
+        run: |
+          echo "🚀 Starting max-speed concurrent aria2c downloads..."
+          python3 -u - << 'EOF'
+          import os
+          import glob
+          import asyncio
+          import re
+          import time
+          import requests
+
+          def get_best_trackers():
+              fallback_trackers = [
+                  "udp://tracker.openbittorrent.com:80/announce",
+                  "udp://tracker.opentrackr.org:1337/announce",
+                  "udp://tracker.torrent.eu.org:451/announce",
+                  "udp://exodus.desync.com:6969/announce"
+              ]
+              try:
+                  url = "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best.txt"
+                  res = requests.get(url, timeout=5)
+                  if res.status_code == 200:
+                      fetched = [line.strip() for line in res.text.splitlines() if line.strip()]
+                      if fetched:
+                          return ",".join(fetched)
+              except Exception:
+                  pass
+              return ",".join(fallback_trackers)
+
+          LIVE_TRACKERS = get_best_trackers()
+
+          async def download_target(target, sem, stuck_timeout=20, max_retries=5):
+              async with sem:
+                  for attempt in range(1, max_retries + 1):
+                      print(f"📥 [Attempt {attempt}/{max_retries}] Starting: {target[:80]}", flush=True)
+                      cmd = [
+                          "aria2c", "--console-log-level=notice", "--summary-interval=2",
+                          "--dir=downloads", "--seed-time=0", "--file-allocation=none",
+                          "--enable-dht=true", "--enable-peer-exchange=true", "--follow-torrent=mem",
+                          "-s16", "-x16", "--min-split-size=1M", "--max-connection-per-server=16",
+                          "--bt-max-peers=128", "--bt-tracker-connect-timeout=5",
+                          "--bt-tracker-timeout=5", f"--bt-tracker={LIVE_TRACKERS}", target
+                      ]
+                      proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+                      download_started = False
+                      start_time = time.time()
+                      
+                      while proc.returncode is None:
+                          try:
+                              line = await asyncio.wait_for(proc.stdout.readline(), timeout=2.0)
+                              if not line: break
+                              line_str = line.decode('utf-8', errors='ignore').strip()
+                              if line_str and not download_started:
+                                  match = re.search(r'\[#\w+\s+([0-9\.]+)([KMGTP]?i?B)/', line_str)
+                                  if match and float(match.group(1)) > 0:
+                                      download_started = True
+                                      print(f"🚀 Download started active transfer for: {os.path.basename(target)}", flush=True)
+                              if not download_started and (time.time() - start_time) > stuck_timeout:
+                                  proc.kill()
+                                  await proc.wait()
+                                  break
+                          except asyncio.TimeoutError:
+                              if not download_started and (time.time() - start_time) > stuck_timeout:
+                                  proc.kill()
+                                  await proc.wait()
+                                  break
+
+                      await proc.wait()
+                      if proc.returncode == 0:
+                          print(f"✅ Successfully finished: {target[:80]}", flush=True)
+                          return target
+                      else:
+                          if os.path.exists(target):
+                              control_file = f"downloads/{os.path.basename(target)}.aria2"
+                              if os.path.exists(control_file): os.remove(control_file)
+                  return None
+
+          async def main():
+              targets = glob.glob("torrents/*.torrent")
+              if os.path.exists("direct_links.txt"):
+                  with open("direct_links.txt", "r") as f:
+                      targets.extend([line.strip() for line in f if line.strip()])
+              if not targets: return
+              os.makedirs("downloads", exist_ok=True)
+              sem = asyncio.Semaphore(16)
+              await asyncio.gather(*[download_target(t, sem) for t in targets])
+
+          asyncio.run(main())
+          EOF
+
+            - name: Upload Folders directly to Gofile
+        env:
+          GOFILE_TOKEN: "CCAoNQI722NEDPWny1OjLID8V1MEZnGS"
+          GOFILE_FOLDER_ID: "2c03ad5c-4986-4c62-92be-1bbdb0d5d90b"
+        run: |
+          echo "📤 Uploading folders directly to Gofile without zipping..."
+          python3 - << 'EOF'
+          import os, requests
+          from concurrent.futures import ThreadPoolExecutor
+
+          TOKEN = os.getenv("GOFILE_TOKEN")
+          PARENT_FOLDER_ID = os.getenv("GOFILE_FOLDER_ID")
+          DOWNLOADS_DIR = "downloads"
+
+          # Get optimal upload server
+          try:
+              res = requests.get("https://api.gofile.io/servers", timeout=10).json()
+              if res.get('status') == 'ok' and res['data']['servers']:
+                  server = res['data']['servers'][0]['name']
+              else:
+                  raise Exception("No active Gofile server available.")
+          except Exception as e:
+              print(f"❌ Server fetch failed: {e}")
+              exit(1)
+
+          upload_url = f"https://{server}.gofile.io/contents/uploadfile"
+          headers = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
+
+          def create_gofile_folder(folder_name, parent_id):
+              """Creates a remote folder on Gofile."""
+              url = "https://api.gofile.io/contents/createFolder"
+              data = {
+                  "parentFolderId": parent_id,
+                  "folderName": folder_name
+              }
+              try:
+                  r = requests.post(url, json=data, headers=headers, timeout=15).json()
+                  if r.get("status") == "ok":
+                      return r["data"]["id"]
+                  print(f"⚠️ Failed creating folder '{folder_name}': {r}")
+              except Exception as e:
+                  print(f"❌ Error creating folder '{folder_name}': {e}")
+              return parent_id
+
+          def upload_file_to_gofile(file_path, target_folder_id):
+              """Uploads a single file to a specific Gofile folder."""
+              fn = os.path.basename(file_path)
+              print(f"🚀 Uploading {fn}...", flush=True)
+              try:
+                  with open(file_path, 'rb') as f:
+                      files = {'file': (fn, f)}
+                      payload = {'folderId': target_folder_id}
+                      res = requests.post(upload_url, files=files, data=payload, headers=headers, timeout=3600).json()
+                      
+                      if res.get('status') == 'ok':
+                          print(f"✅ Finished: {fn}", flush=True)
+                      else:
+                          print(f"❌ Upload failed for {fn}: {res}", flush=True)
+              except Exception as e:
+                  print(f"❌ Exception uploading {fn}: {e}", flush=True)
+
+          if os.path.exists(DOWNLOADS_DIR):
+              for item in os.listdir(DOWNLOADS_DIR):
+                  item_path = os.path.join(DOWNLOADS_DIR, item)
+
+                  # Handle Folders -> Create remote folder, then upload items inside it
+                  if os.path.isdir(item_path):
+                      print(f"\n📁 Creating remote folder on Gofile for: {item}")
+                      remote_folder_id = create_gofile_folder(item, PARENT_FOLDER_ID)
+                      
+                      files_to_upload = []
+                      for root, _, files in os.walk(item_path):
+                          for file in files:
+                              if not file.endswith(('.aria2', '.part')):
+                                  files_to_upload.append(os.path.join(root, file))
+
+                      with ThreadPoolExecutor(max_workers=2) as ex:
+                          ex.map(lambda f: upload_file_to_gofile(f, remote_folder_id), files_to_upload)
+
+                  # Handle loose files directly in downloads directory
+                  elif os.path.isfile(item_path) and not item.endswith(('.aria2', '.part')):
+                      upload_file_to_gofile(item_path, PARENT_FOLDER_ID)
+          EOF
