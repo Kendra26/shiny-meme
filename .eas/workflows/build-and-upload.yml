@@ -3,10 +3,9 @@ name: Build Android and Upload to Filemirage
 on:
   push:
     branches: ['main']
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 jobs:
-  # Job 1: EAS Native Android Build
   build_android:
     name: Build Android App
     type: build
@@ -14,7 +13,6 @@ jobs:
       platform: android
       profile: production
 
-  # Job 2: Download, Zip, and Upload to Filemirage
   process_and_upload:
     name: Process Torrent & Upload
     needs: [build_android]
