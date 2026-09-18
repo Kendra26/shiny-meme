@@ -12,9 +12,6 @@ jobs:
     params:
       image: ubuntu-22.04
     steps:
-      - name: Checkout Code
-        uses: eas/checkout@v1
-
       - name: Install System Dependencies
         run: |
           sudo apt update -qq
