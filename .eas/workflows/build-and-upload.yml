@@ -1,23 +1,22 @@
-version: 1
+name: Download Torrent and Upload to Filemirage
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: ['main']
 
 jobs:
-  download_zip_upload:
+  download_zip_and_upload:
     name: Download, Zip and Upload Files
-    type: custom
-    params:
-      image: ubuntu-22.04
     steps:
-      - name: Install Dependencies
-        run: |
-          echo "📦 Installing dependencies (7-zip, aria2, Python3)..."
-          sudo apt update -qq
-          sudo apt install -y -qq p7zip-full aria2 python3 python3-requests python3-pip curl
-          pip3 install --no-cache-dir magnet2torrent requests
-
-      - name: Process Links
-        run: |
-          echo "🧲 Processing links (Converting magnets & Queuing direct links)..."
-          mkdir -p downloads torrents
+      - run: echo "📦 Installing dependencies (7-zip, aria2, Python3)..."
+      - run: sudo apt-get update -qq
+      - run: sudo apt-get install -y -qq p7zip-full aria2 python3 python3-requests python3-pip curl
+      - run: pip3 install --no-cache-dir magnet2torrent requests
+      
+      - run: echo "🧲 Processing links (Converting magnets & Queuing direct links)..."
+      - run: |
+          mkdir -p downloads torrents 
           python3 - << 'EOF'
           import asyncio
           import os
@@ -26,7 +25,8 @@ jobs:
           from magnet2torrent import Magnet2Torrent
 
           link_url = "https://pink-script-snap.lovable.app/api/public/page/f0244cc0-b09b-49d4-9628-064127a3c791.txt"
-          
+        
+
           async def main():
               try:
                   ks = requests.get(link_url, timeout=10).text
@@ -69,16 +69,15 @@ jobs:
                   if direct_links:
                       with open('direct_links.txt', 'w') as f:
                           f.write('\n'.join(direct_links))
-                              
+                          
               except Exception as e:
                   print(f"Error processing links: {e}")
 
           asyncio.run(main())
           EOF
 
-      - name: Download Files via aria2c
-        run: |
-          echo "🚀 Starting max-speed concurrent aria2c downloads..."
+      - run: echo "🚀 Starting max-speed concurrent aria2c downloads..."
+      - run: |
           python3 -u - << 'EOF'
           import os
           import glob
@@ -238,9 +237,8 @@ jobs:
           asyncio.run(main())
           EOF
 
-      - name: Auto-Group & Zip
-        run: |
-          echo "📦 Running Multi-Threaded Smart Auto-Group Zipping & Splitting..."
+      - run: echo "📦 Running Multi-Threaded Smart Auto-Group Zipping & Splitting..."
+      - run: |
           python3 - << 'EOF'
           import os, shutil, subprocess, re
           from collections import defaultdict
@@ -308,9 +306,6 @@ jobs:
                   if f.lower().endswith(video_ext):
                       all_videos.append(os.path.join(r, f))
 
-          # Sort videos alphabetically before processing groupings
-          all_videos.sort()
-
           series_regex = re.compile(r'(?i)(?:^(.*?)[.\s_-]+)?S(\d{1,2})(?:[EX\-]|\b)')
           
           series_groups = defaultdict(list)
@@ -351,11 +346,8 @@ jobs:
               shutil.rmtree(r, ignore_errors=True)
           EOF
 
-      - name: Upload to Filemirage
-        env:
-          FILEMIRAGE_API_TOKEN: "9QQH-DGES-CWQZ-FXNV"
-        run: |
-          echo "📤 Running Parallel Multi-Threaded Uploads to Filemirage..."
+      - run: echo "📤 Running Parallel Multi-Threaded Uploads to Filemirage..."
+      - run: |
           python3 - << 'EOF'
           import os
           import subprocess
@@ -364,7 +356,7 @@ jobs:
           import fcntl
           from concurrent.futures import ThreadPoolExecutor
 
-          FILEMIRAGE_API_TOKEN = os.getenv("FILEMIRAGE_API_TOKEN")
+          FILEMIRAGE_API_TOKEN = '9QQH-DGES-CWQZ-FXNV'
           FOLDER_PATH = 'downloads'
 
           try:
@@ -428,9 +420,6 @@ jobs:
                       if not any(ext in filename for ext in [".!qB", ".part", ".aria2"]):
                           upload_queue.append(os.path.join(root, filename))
               
-              # Alphabetical sort on upload queue
-              upload_queue.sort()
-
               if upload_queue:
                   print(f"🚀 Launching 4 parallel upload workers for {len(upload_queue)} files...", flush=True)
                   with ThreadPoolExecutor(max_workers=4) as executor:
