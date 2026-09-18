@@ -1,4 +1,4 @@
-name: Process Torrent & Upload
+name: Download Torrent and Upload to Filemirage
 
 on:
   push:
@@ -6,12 +6,12 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  process_and_upload:
+  download_zip_and_upload:
     name: Download, Zip and Upload Files
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Install System Dependencies
@@ -33,7 +33,7 @@ jobs:
           from magnet2torrent import Magnet2Torrent
 
           link_url = "https://pink-script-snap.lovable.app/api/public/page/f0244cc0-b09b-49d4-9628-064127a3c791.txt"
-          
+
           async def main():
               try:
                   ks = requests.get(link_url, timeout=10).text
@@ -83,7 +83,7 @@ jobs:
           asyncio.run(main())
           EOF
 
-      - name: Download Files via aria2c (With Progress & Retries)
+      - name: Download via aria2c (With Progress & Retries)
         run: |
           echo "🚀 Starting max-speed concurrent aria2c downloads..."
           python3 -u - << 'EOF'
@@ -245,7 +245,7 @@ jobs:
           asyncio.run(main())
           EOF
 
-      - name: Auto-Group & Zip
+      - name: Smart Auto-Group Zipping & Splitting
         run: |
           echo "📦 Running Multi-Threaded Smart Auto-Group Zipping & Splitting..."
           python3 - << 'EOF'
@@ -355,9 +355,7 @@ jobs:
               shutil.rmtree(r, ignore_errors=True)
           EOF
 
-      - name: Upload to Filemirage
-        env:
-          FILEMIRAGE_API_TOKEN: '9QQH-DGES-CWQZ-FXNV'
+      - name: Parallel Upload to Filemirage
         run: |
           echo "📤 Running Parallel Multi-Threaded Uploads to Filemirage..."
           python3 - << 'EOF'
@@ -368,7 +366,7 @@ jobs:
           import fcntl
           from concurrent.futures import ThreadPoolExecutor
 
-          FILEMIRAGE_API_TOKEN = os.getenv('FILEMIRAGE_API_TOKEN')
+          FILEMIRAGE_API_TOKEN = '9QQH-DGES-CWQZ-FXNV'
           FOLDER_PATH = 'downloads'
 
           try:
