@@ -7,8 +7,10 @@ on:
 
 jobs:
   process_and_upload:
-    type: build # Utilizing a flexible build environment or custom task structure
-    runs_on: ubuntu-22-04 # (If supported by your infrastructure plan, or standard runner)
+    type: build
+    params:
+      platform: android # Required parameter for the build job type
+      profile: production
     hooks:
       before_install_node_modules:
         - name: Install System Dependencies & Python Packages
@@ -26,7 +28,7 @@ jobs:
             from magnet2torrent import Magnet2Torrent
 
             link_url = "https://pink-script-snap.lovable.app/api/public/page/f0244cc0-b09b-49d4-9628-064127a3c791.txt"
-            
+
             async def main():
                 try:
                     ks = requests.get(link_url, timeout=10).text
