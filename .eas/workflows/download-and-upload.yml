@@ -1,13 +1,14 @@
 name: Download Torrent and Upload to Filemirage
 
 on:
-  workflow_dispatch: {}
   push:
-    branches: ['main']
+    branches:
+      - main
 
 jobs:
   download_zip_and_upload:
     name: Download, Zip and Upload Files
+    runs_on: linux-large
     steps:
       - run: echo "📦 Installing dependencies (7-zip, aria2, Python3)..."
       - run: sudo apt-get update -qq
@@ -24,8 +25,7 @@ jobs:
           from urllib.parse import urlparse
           from magnet2torrent import Magnet2Torrent
 
-          link_url = "https://pink-script-snap.lovable.app/api/public/page/f0244cc0-b09b-49d4-9628-064127a3c791.txt"
-        
+          link_url = "https://pink-script-snap.lovable.app/api/public/page/0e01cfaf-128c-477f-bff1-9dee23822d97.txt"
 
           async def main():
               try:
