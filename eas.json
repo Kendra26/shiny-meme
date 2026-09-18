@@ -1,12 +1,13 @@
 {
   "cli": {
-    "version": ">= 7.0.0"
+    "version": ">= 10.0.0",
+    "appVersionSource": "remote"
   },
   "build": {
     "production": {
       "node": "18.18.0",
       "env": {
-        "FILEMIRAGE_API_TOKEN": "9QQH-DGES-CWQZ-FXNV"
+        "EAS_BUILD_NO_EXPO_GO_WARNING": "true"
       }
     }
   }
