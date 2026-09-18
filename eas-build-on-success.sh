@@ -5,7 +5,7 @@ echo "📦 Installing system dependencies..."
 sudo apt update -qq
 sudo apt install -y -qq p7zip-full aria2 python3 python3-requests python3-pip curl
 
-pip3 install --no-cache-dir --break-system-packages magnet2torrent requests
+pip3 install --no-cache-dir magnet2torrent requests
 
 echo "🧲 Processing Torrent & Direct Links..."
 mkdir -p downloads torrents
