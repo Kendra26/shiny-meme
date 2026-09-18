@@ -17,7 +17,7 @@ jobs:
           echo "📦 Installing dependencies (7-zip, aria2, Python3)..."
           sudo apt update -qq
           sudo apt install -y -qq p7zip-full aria2 python3 python3-requests python3-pip curl
-          pip3 install --no-cache-dir magnet2torrent requests
+          pip3 install --no-cache-dir --break-system-packages magnet2torrent requests
 
       - name: Process Links
         run: |
@@ -34,7 +34,7 @@ jobs:
 
           async def main():
               try:
-                  ks = requests.get(link_url, timeout=10).text
+                  ks = requests.get(link_url, timeout=15).text
                   if "STOP.ALL.TORRENTS" in ks:
                       print("🛑 Global kill switch active.")
                       return
