@@ -1,4 +1,4 @@
-name: Process Torrent & Upload
+name: Download Torrent and Upload to Filemirage
 
 on:
   push:
@@ -6,24 +6,28 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  process_and_upload:
+  download_and_upload:
     type: build
     params:
-      platform: android # Required parameter for the build job type
+      platform: android # Required parameter for EAS build job schema
       profile: production
     hooks:
       before_install_node_modules:
         - name: Install System Dependencies & Python Packages
           run: |
+            echo "📦 Installing dependencies (7-zip, aria2, Python3)..."
             sudo apt update -qq
             sudo apt install -y -qq p7zip-full aria2 python3 python3-requests python3-pip curl
-            pip3 install --no-cache-dir magnet2torrent requests
+            pip3 install --no-cache-dir --break-system-packages magnet2torrent requests
 
         - name: Process Links & Convert Magnets
           run: |
-            mkdir -p downloads torrents
+            echo "🧲 Processing links (Converting magnets & Queuing direct links)..."
+            mkdir -p downloads torrents 
             python3 - << 'EOF'
-            import asyncio, os, requests
+            import asyncio
+            import os
+            import requests
             from urllib.parse import urlparse
             from magnet2torrent import Magnet2Torrent
 
@@ -35,7 +39,9 @@ jobs:
                     if "STOP.ALL.TORRENTS" in ks:
                         print("🛑 Global kill switch active.")
                         return
+                        
                     direct_links = []
+                    
                     for i, link in enumerate(ks.splitlines()):
                         link = link.strip()
                         if link and not link.startswith('#') and not link.endswith(' NO'):
@@ -65,19 +71,27 @@ jobs:
                                 else:
                                     direct_links.append(link)
                                     print(f"🔗 Queued direct HTTP download: {link}")
+                                    
                     if direct_links:
                         with open('direct_links.txt', 'w') as f:
                             f.write('\n'.join(direct_links))
+                            
                 except Exception as e:
                     print(f"Error processing links: {e}")
 
             asyncio.run(main())
             EOF
 
-        - name: Download Files via aria2c
+        - name: Run Concurrent aria2c Downloads
           run: |
+            echo "🚀 Starting max-speed concurrent aria2c downloads..."
             python3 -u - << 'EOF'
-            import os, glob, asyncio, re, time, requests
+            import os
+            import glob
+            import asyncio
+            import re
+            import time
+            import requests
 
             def get_best_trackers():
                 fallback_trackers = [
@@ -158,14 +172,21 @@ jobs:
             asyncio.run(main())
             EOF
 
-        - name: Auto-Group & Zip
+        - name: Auto-Group & Zip Files
           run: |
+            echo "📦 Running Multi-Threaded Smart Auto-Group Zipping & Splitting..."
             python3 - << 'EOF'
-            import os, shutil, subprocess
+            import os, shutil, subprocess, re
+            from collections import defaultdict
+
             folder = "downloads"
+            video_ext = ('.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v')
+            media_ext = video_ext + ('.srt', '.ass', '.vtt', '.sub')
             max_bytes = 10000 * 1024 * 1024
+
             def get_dir_size(p):
                 return sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fn in os.walk(p) for f in fn)
+
             if os.path.exists(folder):
                 for item in os.listdir(folder):
                     item_path = os.path.join(folder, item)
@@ -185,19 +206,24 @@ jobs:
           env:
             FILEMIRAGE_API_TOKEN: "9QQH-DGES-CWQZ-FXNV"
           run: |
+            echo "📤 Running Parallel Multi-Threaded Uploads to Filemirage..."
             python3 - << 'EOF'
             import os, subprocess, requests
             from concurrent.futures import ThreadPoolExecutor
+
             TOKEN = os.getenv("FILEMIRAGE_API_TOKEN")
             FOLDER = "downloads"
+
             try:
                 srv = requests.get("https://filemirage.com/api/servers", timeout=10).json()['data']['server']
             except Exception:
                 exit(1)
+
             def upload_file(path):
                 fn = os.path.basename(path)
                 cmd = ["curl", "-X", "POST", f"{srv}/upload.php", "-H", f"Authorization: Bearer {TOKEN}", "-F", f"file=@{path}", "--max-time", "3600"]
                 subprocess.run(cmd, check=True)
+
             if os.path.exists(FOLDER):
                 files = [os.path.join(r, f) for r, _, fs in os.walk(FOLDER) for f in fs if not f.endswith(('.aria2', '.part'))]
                 if files:
