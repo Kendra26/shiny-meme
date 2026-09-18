@@ -10,9 +10,6 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 360
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
       - name: Install System Dependencies & Python Packages
         run: |
           echo "📦 Installing dependencies (7-zip, aria2, Python3)..."
