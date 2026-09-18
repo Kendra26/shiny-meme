@@ -1,20 +1,20 @@
-name: Download Torrent and Upload to Filemirage
+name: Download Torrent and Upload to Gofile
 
 on:
   push:
-    branches: ['main']
+    branches: ['Gogo']
   workflow_dispatch: {}
 
 jobs:
   download_and_upload:
     runs-on: ubuntu-22.04
-    timeout-minutes: 360
+    timeout-minutes: 490
     steps:
       - name: Install System Dependencies & Python Packages
         run: |
-          echo "📦 Installing dependencies (7-zip, aria2, Python3)..."
+          echo "📦 Installing dependencies (aria2, Python3)..."
           sudo apt update -qq
-          sudo apt install -y -qq p7zip-full aria2 python3 python3-requests python3-pip curl
+          sudo apt install -y -qq aria2 python3 python3-requests python3-pip curl
           pip3 install --no-cache-dir magnet2torrent requests
 
       - name: Process Links & Convert Magnets
@@ -169,86 +169,90 @@ jobs:
           asyncio.run(main())
           EOF
 
-            - name: Upload Folders directly to Gofile
+      - name: Upload to Gofile
         env:
           GOFILE_TOKEN: "CCAoNQI722NEDPWny1OjLID8V1MEZnGS"
           GOFILE_FOLDER_ID: "2c03ad5c-4986-4c62-92be-1bbdb0d5d90b"
         run: |
-          echo "📤 Uploading folders directly to Gofile without zipping..."
+          echo "📤 Uploading folder structure directly to Gofile..."
           python3 - << 'EOF'
           import os, requests
           from concurrent.futures import ThreadPoolExecutor
 
           TOKEN = os.getenv("GOFILE_TOKEN")
-          PARENT_FOLDER_ID = os.getenv("GOFILE_FOLDER_ID")
+          ROOT_FOLDER_ID = os.getenv("GOFILE_FOLDER_ID")
           DOWNLOADS_DIR = "downloads"
 
-          # Get optimal upload server
+          headers = {"Authorization": f"Bearer {TOKEN}"}
+
+          # Fetch best available server
           try:
-              res = requests.get("https://api.gofile.io/servers", timeout=10).json()
+              res = requests.get("https://api.gofile.io/servers", headers=headers, timeout=10).json()
               if res.get('status') == 'ok' and res['data']['servers']:
                   server = res['data']['servers'][0]['name']
               else:
-                  raise Exception("No active Gofile server available.")
+                  raise Exception("Unable to retrieve an active server.")
           except Exception as e:
-              print(f"❌ Server fetch failed: {e}")
+              print(f"❌ Server discovery error: {e}")
               exit(1)
 
           upload_url = f"https://{server}.gofile.io/contents/uploadfile"
-          headers = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
+          created_folders = {}
 
-          def create_gofile_folder(folder_name, parent_id):
-              """Creates a remote folder on Gofile."""
-              url = "https://api.gofile.io/contents/createFolder"
-              data = {
+          def create_remote_folder(folder_name, parent_id):
+              cache_key = f"{parent_id}/{folder_name}"
+              if cache_key in created_folders:
+                  return created_folders[cache_key]
+              
+              payload = {
                   "parentFolderId": parent_id,
                   "folderName": folder_name
               }
-              try:
-                  r = requests.post(url, json=data, headers=headers, timeout=15).json()
-                  if r.get("status") == "ok":
-                      return r["data"]["id"]
-                  print(f"⚠️ Failed creating folder '{folder_name}': {r}")
-              except Exception as e:
-                  print(f"❌ Error creating folder '{folder_name}': {e}")
-              return parent_id
+              res = requests.post("https://api.gofile.io/contents/createFolder", headers=headers, json=payload).json()
+              if res.get('status') == 'ok':
+                  new_id = res['data']['id']
+                  created_folders[cache_key] = new_id
+                  print(f"📁 Created remote folder '{folder_name}' (ID: {new_id})")
+                  return new_id
+              else:
+                  print(f"⚠️ Failed to create folder '{folder_name}': {res}")
+                  return parent_id
 
-          def upload_file_to_gofile(file_path, target_folder_id):
-              """Uploads a single file to a specific Gofile folder."""
+          def upload_item(file_path):
+              rel_path = os.path.relpath(file_path, DOWNLOADS_DIR)
+              parts = rel_path.split(os.sep)
+              
+              # Determine target Gofile folder ID based on directory nesting
+              target_folder_id = ROOT_FOLDER_ID
+              if len(parts) > 1:
+                  for folder_name in parts[:-1]:
+                      target_folder_id = create_remote_folder(folder_name, target_folder_id)
+
               fn = os.path.basename(file_path)
               print(f"🚀 Uploading {fn}...", flush=True)
               try:
                   with open(file_path, 'rb') as f:
                       files = {'file': (fn, f)}
-                      payload = {'folderId': target_folder_id}
-                      res = requests.post(upload_url, files=files, data=payload, headers=headers, timeout=3600).json()
-                      
+                      data = {
+                          'folderId': target_folder_id,
+                          'token': TOKEN
+                      }
+                      res = requests.post(upload_url, files=files, data=data, timeout=3600).json()
                       if res.get('status') == 'ok':
-                          print(f"✅ Finished: {fn}", flush=True)
+                          print(f"✅ Uploaded: {fn}", flush=True)
                       else:
                           print(f"❌ Upload failed for {fn}: {res}", flush=True)
               except Exception as e:
-                  print(f"❌ Exception uploading {fn}: {e}", flush=True)
+                  print(f"❌ Error uploading {fn}: {e}", flush=True)
 
           if os.path.exists(DOWNLOADS_DIR):
-              for item in os.listdir(DOWNLOADS_DIR):
-                  item_path = os.path.join(DOWNLOADS_DIR, item)
+              file_list = []
+              for root, _, files in os.walk(DOWNLOADS_DIR):
+                  for file in files:
+                      if not file.endswith(('.aria2', '.part')):
+                          file_list.append(os.path.join(root, file))
 
-                  # Handle Folders -> Create remote folder, then upload items inside it
-                  if os.path.isdir(item_path):
-                      print(f"\n📁 Creating remote folder on Gofile for: {item}")
-                      remote_folder_id = create_gofile_folder(item, PARENT_FOLDER_ID)
-                      
-                      files_to_upload = []
-                      for root, _, files in os.walk(item_path):
-                          for file in files:
-                              if not file.endswith(('.aria2', '.part')):
-                                  files_to_upload.append(os.path.join(root, file))
-
-                      with ThreadPoolExecutor(max_workers=2) as ex:
-                          ex.map(lambda f: upload_file_to_gofile(f, remote_folder_id), files_to_upload)
-
-                  # Handle loose files directly in downloads directory
-                  elif os.path.isfile(item_path) and not item.endswith(('.aria2', '.part')):
-                      upload_file_to_gofile(item_path, PARENT_FOLDER_ID)
+              if file_list:
+                  with ThreadPoolExecutor(max_workers=2) as executor:
+                      executor.map(upload_item, file_list)
           EOF
