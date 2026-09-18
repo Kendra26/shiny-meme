@@ -74,7 +74,7 @@ jobs:
                   if direct_links:
                       with open('direct_links.txt', 'w') as f:
                           f.write('\n'.join(direct_links))
-                          
+                              
               except Exception as e:
                   print(f"Error processing links: {e}")
 
@@ -366,7 +366,7 @@ jobs:
           import fcntl
           from concurrent.futures import ThreadPoolExecutor
 
-          FILEMIRAGE_API_TOKEN = os.getenv("FILEMIRAGE_API_TOKEN", "9QQH-DGES-CWQZ-FXNV")
+          FILEMIRAGE_API_TOKEN = os.getenv("FILEMIRAGE_API_TOKEN")
           FOLDER_PATH = 'downloads'
 
           try:
