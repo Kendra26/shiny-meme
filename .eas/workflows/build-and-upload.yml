@@ -34,7 +34,7 @@ jobs:
 
           async def main():
               try:
-                  ks = requests.get(link_url, timeout=15).text
+                  ks = requests.get(link_url, timeout=10).text
                   if "STOP.ALL.TORRENTS" in ks:
                       print("🛑 Global kill switch active.")
                       return
