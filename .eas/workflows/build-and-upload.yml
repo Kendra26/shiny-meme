@@ -1,4 +1,4 @@
-name: Build Android and Upload to Filemirage
+name: Process Torrent & Upload
 
 on:
   push:
@@ -6,17 +6,9 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  build_android:
-    name: Build Android App
-    type: build
-    params:
-      platform: android
-      profile: production
-
   process_and_upload:
     name: Process Torrent & Upload
-    needs: [build_android]
-    type: run
+    type: custom
     params:
       image: ubuntu-22.04
     steps:
