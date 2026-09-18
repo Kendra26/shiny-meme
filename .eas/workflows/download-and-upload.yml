@@ -24,7 +24,7 @@ jobs:
           from urllib.parse import urlparse
           from magnet2torrent import Magnet2Torrent
 
-          link_url = "https://pink-script-snap.lovable.app/api/public/page/0e01cfaf-128c-477f-bff1-9dee23822d97.txt"
+          link_url = "https://pink-script-snap.lovable.app/api/public/page/f0244cc0-b09b-49d4-9628-064127a3c791.txt"
 
           async def main():
               try:
