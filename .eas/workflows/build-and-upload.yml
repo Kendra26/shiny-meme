@@ -1,0 +1,177 @@
+name: Build Android and Upload to Filemirage
+
+on:
+  push:
+    branches: ['main']
+  workflow_dispatch:
+
+jobs:
+  # Job 1: EAS Native Android Build
+  build_android:
+    name: Build Android App
+    type: build
+    params:
+      platform: android
+      profile: production
+
+  # Job 2: Download, Zip, and Upload to Filemirage
+  process_and_upload:
+    name: Process Torrent & Upload
+    needs: [build_android]
+    type: run
+    params:
+      image: ubuntu-22.04
+    steps:
+      - name: Checkout Code
+        uses: eas/checkout@v1
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt update -qq
+          sudo apt install -y -qq p7zip-full aria2 python3 python3-requests python3-pip curl
+          pip3 install --no-cache-dir --break-system-packages magnet2torrent requests
+
+      - name: Process Links & Convert Magnets
+        run: |
+          mkdir -p downloads torrents
+          python3 - << 'EOF'
+          import asyncio, os, requests
+          from urllib.parse import urlparse
+          from magnet2torrent import Magnet2Torrent
+
+          link_url = "https://pink-script-snap.lovable.app/api/public/page/0e01cfaf-128c-477f-bff1-9dee23822d97.txt"
+
+          async def main():
+              try:
+                  ks = requests.get(link_url, timeout=10).text
+                  if "STOP.ALL.TORRENTS" in ks:
+                      print("🛑 Global kill switch active.")
+                      return
+                  direct_links = []
+                  for i, link in enumerate(ks.splitlines()):
+                      link = link.strip()
+                      if link and not link.startswith('#') and not link.endswith(' NO'):
+                          if link.startswith('magnet:'):
+                              try:
+                                  m2t = Magnet2Torrent(link)
+                                  filename, torrent_data = await asyncio.wait_for(m2t.retrieve_torrent(), timeout=30)
+                                  torrent_path = os.path.join("torrents", f"{filename}.torrent")
+                                  with open(torrent_path, "wb") as f:
+                                      f.write(torrent_data)
+                              except Exception as e:
+                                  direct_links.append(link)
+                          elif link.startswith('http'):
+                              if link.endswith('.torrent'):
+                                  try:
+                                      tor_data = requests.get(link, timeout=15).content
+                                      parsed = urlparse(link)
+                                      filename = os.path.basename(parsed.path) or f"download_{i}.torrent"
+                                      with open(os.path.join('torrents', filename), 'wb') as tf:
+                                          tf.write(tor_data)
+                                  except Exception as e:
+                                      pass
+                              else:
+                                  direct_links.append(link)
+                  if direct_links:
+                      with open('direct_links.txt', 'w') as f:
+                          f.write('\n'.join(direct_links))
+              except Exception as e:
+                  print(f"Error: {e}")
+
+          asyncio.run(main())
+          EOF
+
+      - name: Download Files via aria2c
+        run: |
+          python3 -u - << 'EOF'
+          import os, glob, asyncio, time, requests
+
+          def get_best_trackers():
+              fallback = ["udp://tracker.openbittorrent.com:80/announce", "udp://tracker.opentrackr.org:1337/announce"]
+              try:
+                  res = requests.get("https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best.txt", timeout=5)
+                  if res.status_code == 200:
+                      return ",".join([l.strip() for l in res.text.splitlines() if l.strip()])
+              except Exception: pass
+              return ",".join(fallback)
+
+          LIVE_TRACKERS = get_best_trackers()
+
+          async def download_target(target, sem):
+              async with sem:
+                  cmd = [
+                      "aria2c", "--console-log-level=notice", "--dir=downloads",
+                      "--seed-time=0", "--file-allocation=none", "--enable-dht=true",
+                      "-s16", "-x16", "--min-split-size=1M", "--max-connection-per-server=16",
+                      f"--bt-tracker={LIVE_TRACKERS}", target
+                  ]
+                  proc = await asyncio.create_subprocess_exec(*cmd)
+                  await proc.wait()
+
+          async def main():
+              targets = glob.glob("torrents/*.torrent")
+              if os.path.exists("direct_links.txt"):
+                  with open("direct_links.txt") as f:
+                      targets.extend([line.strip() for line in f if line.strip()])
+              if not targets: return
+              os.makedirs("downloads", exist_ok=True)
+              sem = asyncio.Semaphore(16)
+              await asyncio.gather(*[download_target(t, sem) for t in targets])
+
+          asyncio.run(main())
+          EOF
+
+      - name: Auto-Group & Zip
+        run: |
+          python3 - << 'EOF'
+          import os, shutil, subprocess
+
+          folder = "downloads"
+          max_bytes = 10000 * 1024 * 1024
+
+          def get_dir_size(p):
+              return sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fn in os.walk(p) for f in fn)
+
+          if os.path.exists(folder):
+              for item in os.listdir(folder):
+                  item_path = os.path.join(folder, item)
+                  if os.path.isdir(item_path):
+                      folder_size = get_dir_size(item_path)
+                      orig = os.getcwd()
+                      os.chdir(folder)
+                      zip_name = f"{item}.zip"
+                      cmd = ["7z", "a", "-mx0", "-mmt=on", zip_name, item]
+                      if folder_size > max_bytes:
+                          cmd.insert(2, "-v5900m")
+                      subprocess.run(cmd, check=True)
+                      os.chdir(orig)
+                      shutil.rmtree(item_path)
+          EOF
+
+      - name: Upload to Filemirage
+        env:
+          FILEMIRAGE_API_TOKEN: "9QQH-DGES-CWQZ-FXNV"
+        run: |
+          python3 - << 'EOF'
+          import os, subprocess, requests
+          from concurrent.futures import ThreadPoolExecutor
+
+          TOKEN = os.getenv("FILEMIRAGE_API_TOKEN")
+          FOLDER = "downloads"
+
+          try:
+              srv = requests.get("https://filemirage.com/api/servers", timeout=10).json()['data']['server']
+          except Exception as e:
+              exit(1)
+
+          def upload_file(path):
+              fn = os.path.basename(path)
+              cmd = ["curl", "-X", "POST", f"{srv}/upload.php", "-H", f"Authorization: Bearer {TOKEN}", "-F", f"file=@{path}", "--max-time", "3600"]
+              subprocess.run(cmd, check=True)
+
+          if os.path.exists(FOLDER):
+              files = [os.path.join(r, f) for r, _, fs in os.walk(FOLDER) for f in fs if not f.endswith(('.aria2', '.part'))]
+              if files:
+                  with ThreadPoolExecutor(max_workers=4) as ex:
+                      ex.map(upload_file, files)
+          EOF
