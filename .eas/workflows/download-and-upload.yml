@@ -8,9 +8,7 @@ on:
 jobs:
   process_and_upload:
     name: Process Torrent & Upload
-    type: custom
-    params:
-      image: ubuntu-22.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Install System Dependencies
         run: |
@@ -39,13 +37,16 @@ jobs:
                       link = link.strip()
                       if link and not link.startswith('#') and not link.endswith(' NO'):
                           if link.startswith('magnet:'):
+                              print(f"📥 Converting magnet: {link[:60]}...", flush=True)
                               try:
                                   m2t = Magnet2Torrent(link)
                                   filename, torrent_data = await asyncio.wait_for(m2t.retrieve_torrent(), timeout=30)
                                   torrent_path = os.path.join("torrents", f"{filename}.torrent")
                                   with open(torrent_path, "wb") as f:
                                       f.write(torrent_data)
+                                  print(f"✅ Saved torrent: {torrent_path}")
                               except Exception as e:
+                                  print(f"⚠️ Magnet conversion failed ({e}). Queuing raw magnet for aria2c fallback!", flush=True)
                                   direct_links.append(link)
                           elif link.startswith('http'):
                               if link.endswith('.torrent'):
@@ -55,52 +56,137 @@ jobs:
                                       filename = os.path.basename(parsed.path) or f"download_{i}.torrent"
                                       with open(os.path.join('torrents', filename), 'wb') as tf:
                                           tf.write(tor_data)
+                                      print(f"✅ Downloaded .torrent file: {filename}")
                                   except Exception as e:
-                                      pass
+                                      print(f"❌ Failed to download torrent file ({e}): {link}")
                               else:
                                   direct_links.append(link)
+                                  print(f"🔗 Queued direct HTTP download: {link}")
                   if direct_links:
                       with open('direct_links.txt', 'w') as f:
                           f.write('\n'.join(direct_links))
               except Exception as e:
-                  print(f"Error: {e}")
+                  print(f"Error processing links: {e}")
 
           asyncio.run(main())
           EOF
 
-      - name: Download Files via aria2c
+      - name: Download Files via aria2c (With Timeout & Retries)
         run: |
           python3 -u - << 'EOF'
-          import os, glob, asyncio, time, requests
+          import os, glob, asyncio, re, time, requests
 
           def get_best_trackers():
-              fallback = ["udp://tracker.openbittorrent.com:80/announce", "udp://tracker.opentrackr.org:1337/announce"]
+              fallback_trackers = [
+                  "udp://tracker.openbittorrent.com:80/announce",
+                  "udp://tracker.opentrackr.org:1337/announce",
+                  "udp://tracker.torrent.eu.org:451/announce",
+                  "udp://exodus.desync.com:6969/announce"
+              ]
               try:
-                  res = requests.get("https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best.txt", timeout=5)
+                  url = "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best.txt"
+                  res = requests.get(url, timeout=5)
                   if res.status_code == 200:
-                      return ",".join([l.strip() for l in res.text.splitlines() if l.strip()])
-              except Exception: pass
-              return ",".join(fallback)
+                      fetched = [line.strip() for line in res.text.splitlines() if line.strip()]
+                      if fetched:
+                          return ",".join(fetched)
+              except Exception:
+                  pass
+              return ",".join(fallback_trackers)
 
           LIVE_TRACKERS = get_best_trackers()
 
-          async def download_target(target, sem):
+          async def download_target(target, sem, stuck_timeout=20, max_retries=5):
               async with sem:
-                  cmd = [
-                      "aria2c", "--console-log-level=notice", "--dir=downloads",
-                      "--seed-time=0", "--file-allocation=none", "--enable-dht=true",
-                      "-s16", "-x16", "--min-split-size=1M", "--max-connection-per-server=16",
-                      f"--bt-tracker={LIVE_TRACKERS}", target
-                  ]
-                  proc = await asyncio.create_subprocess_exec(*cmd)
-                  await proc.wait()
+                  for attempt in range(1, max_retries + 1):
+                      print(f"📥 [Attempt {attempt}/{max_retries}] Starting: {target[:80]}", flush=True)
+                      cmd = [
+                          "aria2c",
+                          "--console-log-level=notice",
+                          "--summary-interval=2",
+                          "--dir=downloads",
+                          "--seed-time=0",
+                          "--file-allocation=none",
+                          "--enable-dht=true",
+                          "--enable-peer-exchange=true",
+                          "--follow-torrent=mem",
+                          "-s16",
+                          "-x16",
+                          "--min-split-size=1M",
+                          "--max-connection-per-server=16",
+                          "--bt-max-peers=128",
+                          "--bt-tracker-connect-timeout=5",
+                          "--bt-tracker-timeout=5",
+                          f"--bt-tracker={LIVE_TRACKERS}",
+                          target
+                      ]
+                      
+                      proc = await asyncio.create_subprocess_exec(
+                          *cmd,
+                          stdout=asyncio.subprocess.PIPE,
+                          stderr=asyncio.subprocess.STDOUT
+                      )
+                      
+                      download_started = False
+                      start_time = time.time()
+                      
+                      while proc.returncode is None:
+                          try:
+                              line = await asyncio.wait_for(proc.stdout.readline(), timeout=2.0)
+                              if not line:
+                                  break
+                              line_str = line.decode('utf-8', errors='ignore').strip()
+                              
+                              if line_str and not download_started:
+                                  match = re.search(r'\[#\w+\s+([0-9\.]+)([KMGTP]?i?B)/', line_str)
+                                  if match and float(match.group(1)) > 0:
+                                      download_started = True
+                                      print(f"🚀 Download started active transfer for: {os.path.basename(target)}", flush=True)
+                              
+                              if not download_started and (time.time() - start_time) > stuck_timeout:
+                                  print(f"⏱️ Stuck at 0% for {stuck_timeout}s. Terminating attempt {attempt}...", flush=True)
+                                  try:
+                                      proc.kill()
+                                  except Exception:
+                                      pass
+                                  await proc.wait()
+                                  break
+                          except asyncio.TimeoutError:
+                              if not download_started and (time.time() - start_time) > stuck_timeout:
+                                  print(f"⏱️ Stuck at 0% (idle) for {stuck_timeout}s. Terminating attempt {attempt}...", flush=True)
+                                  try:
+                                      proc.kill()
+                                  except Exception:
+                                      pass
+                                  await proc.wait()
+                                  break
+
+                      await proc.wait()
+                      
+                      if proc.returncode == 0:
+                          print(f"✅ Successfully finished: {target[:80]}", flush=True)
+                          return target
+                      else:
+                          print(f"⚠️ Failed or timed out on {target[:80]} (Attempt {attempt}).", flush=True)
+                          # Remove .aria2 control file to prevent resumption blockages on retry
+                          if os.path.exists(target):
+                              control_file = f"downloads/{os.path.basename(target)}.aria2"
+                              if os.path.exists(control_file):
+                                  try:
+                                      os.remove(control_file)
+                                  except Exception:
+                                      pass
+                  
+                  print(f"❌ Failed all {max_retries} attempts for: {target[:80]}", flush=True)
+                  return None
 
           async def main():
               targets = glob.glob("torrents/*.torrent")
               if os.path.exists("direct_links.txt"):
-                  with open("direct_links.txt") as f:
+                  with open("direct_links.txt", "r") as f:
                       targets.extend([line.strip() for line in f if line.strip()])
-              if not targets: return
+              if not targets:
+                  return
               os.makedirs("downloads", exist_ok=True)
               sem = asyncio.Semaphore(16)
               await asyncio.gather(*[download_target(t, sem) for t in targets])
